@@ -265,6 +265,35 @@ void testText() {
     // Structural characters inside strings are not structure.
     CHECK_EQ(*prettyJson("{\"a\":\"[,{\\\":}]\"}"), std::string("{\n  \"a\": \"[,{\\\":}]\"\n}"));
 
+    CHECK_EQ(prettyMarkup("", true), std::string());
+    CHECK_EQ(prettyMarkup("<!doctype html><html><body class=\"x\"><h1>Hello</h1><br><img src=a></body></html>", true),
+             std::string("<!doctype html>\n<html>\n  <body class=\"x\">\n    <h1>Hello</h1>\n    <br>\n"
+                         "    <img src=a>\n  </body>\n</html>"));
+    // Blank lines go, and a tag spread over lines is pulled together. Space and '>'
+    // inside quotes belong to the value.
+    CHECK_EQ(prettyMarkup("\n\n<html\n  lang=\"en\"\n\n  title=\"a  > b\"\n  >\n\n<p>x</p>\n\n</html>\n", true),
+             std::string("<html lang=\"en\" title=\"a  > b\">\n  <p>x</p>\n</html>"));
+    // Case doesn't matter in HTML, and some end tags can be left out.
+    CHECK_EQ(prettyMarkup("<UL><li>a<li>b</ul><DIV></div>", true),
+             std::string("<UL>\n  <li>\n    a\n  <li>\n    b\n</ul>\n<DIV></div>"));
+    // Scripts and the like aren't markup. <pre> keeps its whitespace.
+    CHECK_EQ(prettyMarkup("<div><script>if (a<b) { c(\"<p>\"); }</SCRIPT><pre> x\n  y </pre></div>", true),
+             std::string("<div>\n  <script>\n    if (a<b) { c(\"<p>\"); }\n  </SCRIPT>\n  <pre> x\n  y </pre>\n</div>"));
+    CHECK_EQ(prettyMarkup("<script src=\"a.js\"></script>", true), std::string("<script src=\"a.js\"></script>"));
+    // Broken markup still comes out, with nothing lost.
+    CHECK_EQ(prettyMarkup("</b>a < b<div", true), std::string("</b>\na\n< b\n<div"));
+    CHECK_EQ(prettyMarkup("<div><span></div><p>x", true), std::string("<div>\n  <span>\n</div>\n<p>\n  x"));
+    CHECK_EQ(prettyMarkup("<!-- a\n b --><p>", true), std::string("<!-- a\nb -->\n<p>"));
+    // In XML, case matters, nothing is implicit and CDATA stays as it is.
+    CHECK_EQ(prettyMarkup("<?xml version=\"1.0\"?><a><B/><b>x</b><br><![CDATA[ <y> ]]></br></a>", false),
+             std::string("<?xml version=\"1.0\"?>\n<a>\n  <B/>\n  <b>x</b>\n  <br>\n    <![CDATA[ <y> ]]>\n  </br>\n</a>"));
+    // Indent stops growing, so very deep input can't blow up the output.
+    {
+        std::string deep;
+        for (int i = 0; i < 20000; ++i) deep += "<a>";
+        CHECK(prettyMarkup(deep, false).size() < deep.size() * 40);
+    }
+
     CHECK(isValidUtf8("plain"));
     CHECK(isValidUtf8("\xC5\xBC\xE2\x82\xAC\xF0\x9F\x98\x80"));
     CHECK(!isValidUtf8("\xC5"));

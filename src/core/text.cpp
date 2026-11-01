@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <map>
+#include <vector>
 
 namespace fetcher {
 
@@ -19,7 +21,289 @@ std::string lowerTrimmed(std::string_view text) {
     return out;
 }
 
+bool isMarkupSpace(char c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f';
+}
+
+std::string_view trimMarkupSpace(std::string_view text) {
+    while (!text.empty() && isMarkupSpace(text.front())) text.remove_prefix(1);
+    while (!text.empty() && isMarkupSpace(text.back())) text.remove_suffix(1);
+    return text;
+}
+
+bool isNameStart(char c) {
+    const auto byte = static_cast<unsigned char>(c);
+    return std::isalpha(byte) || c == '_' || c == ':' || byte >= 0x80;
+}
+
+bool isNameChar(char c) {
+    return isNameStart(c) || std::isdigit(static_cast<unsigned char>(c)) || c == '-' || c == '.';
+}
+
+bool startsWith(std::string_view text, std::size_t at, std::string_view prefix) {
+    return text.compare(at, prefix.size(), prefix) == 0;
+}
+
+// Lays out one document. Runs in linear time, since a response can be large and
+// its contents are out of anyone's control.
+class MarkupPrinter {
+public:
+    MarkupPrinter(std::string_view text, bool html) : text_(text), html_(html) {}
+
+    std::string print() {
+        while (pos_ < text_.size()) {
+            if (text_[pos_] != '<' || !printMarkup()) printText();
+        }
+        if (!out_.empty()) out_.pop_back();  // the last line's newline
+        return std::move(out_);
+    }
+
+private:
+    // Past this, more indent only pushes the text out of sight. It also stops
+    // deeply nested input from producing output quadratic in its size.
+    static constexpr std::size_t kMaxIndent = 40;
+    static constexpr std::size_t kMaxInlineLength = 120;
+
+    void startLine(std::size_t depth) { out_.append(std::min(depth, kMaxIndent) * 2, ' '); }
+
+    void line(std::string_view content, std::size_t depth) {
+        startLine(depth);
+        out_ += content;
+        out_ += '\n';
+    }
+
+    // Each non-blank line of `content`, indented to `depth` with its own edges trimmed.
+    void lines(std::string_view content, std::size_t depth) {
+        while (!content.empty()) {
+            const std::size_t end = content.find('\n');
+            const std::string_view part = trimMarkupSpace(content.substr(0, end));
+            if (!part.empty()) line(part, depth);
+            if (end == std::string_view::npos) break;
+            content.remove_prefix(end + 1);
+        }
+    }
+
+    void printText() {
+        const std::size_t end = text_.find('<', pos_ + 1);
+        lines(text_.substr(pos_, end == std::string_view::npos ? end : end - pos_), stack_.size());
+        pos_ = end == std::string_view::npos ? text_.size() : end;
+    }
+
+    // Prints what starts at the '<' at pos_, or returns false if that isn't markup
+    // after all, as in "a < b" or a tag that never ends.
+    bool printMarkup() {
+        if (startsWith(text_, pos_, "<!--")) {
+            printDelimited("-->", false);
+        } else if (startsWith(text_, pos_, "<![CDATA[")) {
+            printDelimited("]]>", true);
+        } else if (startsWith(text_, pos_, "<!") || startsWith(text_, pos_, "<?")) {
+            const std::size_t end = tagEnd(pos_);
+            if (end == std::string_view::npos) return false;
+            line(tidyTag(text_.substr(pos_, end - pos_)), stack_.size());
+            pos_ = end;
+        } else if (startsWith(text_, pos_, "</") && pos_ + 2 < text_.size() && isNameStart(text_[pos_ + 2])) {
+            return printClosingTag();
+        } else if (pos_ + 1 < text_.size() && isNameStart(text_[pos_ + 1])) {
+            return printOpeningTag();
+        } else {
+            return false;
+        }
+        return true;
+    }
+
+    void printDelimited(std::string_view closer, bool verbatim) {
+        const std::size_t found = text_.find(closer, pos_);
+        const std::size_t end = found == std::string_view::npos ? text_.size() : found + closer.size();
+        const std::string_view whole = text_.substr(pos_, end - pos_);
+        if (verbatim) {
+            line(whole, stack_.size());
+        } else {
+            lines(whole, stack_.size());
+        }
+        pos_ = end;
+    }
+
+    // Just past the '>' that ends the tag at `start`, ignoring any inside quotes.
+    std::size_t tagEnd(std::size_t start) const {
+        char quote = 0;
+        for (std::size_t i = start; i < text_.size(); ++i) {
+            const char c = text_[i];
+            if (quote) {
+                if (c == quote) quote = 0;
+            } else if (c == '"' || c == '\'') {
+                quote = c;
+            } else if (c == '>') {
+                return i + 1;
+            }
+        }
+        return std::string_view::npos;
+    }
+
+    // A tag on one line, with runs of space outside quotes reduced to one.
+    static std::string tidyTag(std::string_view tag) {
+        std::string out;
+        out.reserve(tag.size());
+        char quote = 0;
+        bool pendingSpace = false;
+        for (const char c : tag) {
+            if (quote) {
+                out += c;
+                if (c == quote) quote = 0;
+            } else if (isMarkupSpace(c)) {
+                pendingSpace = true;
+            } else {
+                if (pendingSpace && c != '>') out += ' ';
+                pendingSpace = false;
+                out += c;
+                if (c == '"' || c == '\'') quote = c;
+            }
+        }
+        return out;
+    }
+
+    std::string nameAt(std::size_t start) const {
+        std::size_t end = start;
+        while (end < text_.size() && isNameChar(text_[end])) ++end;
+        std::string name(text_.substr(start, end - start));
+        return html_ ? lowerTrimmed(name) : name;
+    }
+
+    static bool isIn(const std::string& name, std::initializer_list<std::string_view> names) {
+        return std::find(names.begin(), names.end(), name) != names.end();
+    }
+
+    static bool isVoidElement(const std::string& name) {
+        return isIn(name, {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
+                           "source", "track", "wbr"});
+    }
+
+    // Whether opening `name` ends an open `current`, whose end tag HTML lets you leave out.
+    static bool closesImplicitly(const std::string& current, const std::string& name) {
+        if (current == name) return isIn(name, {"li", "p", "tr", "td", "th", "dt", "dd", "option"});
+        return (isIn(current, {"td", "th"}) && isIn(name, {"td", "th"})) ||
+               (isIn(current, {"dt", "dd"}) && isIn(name, {"dt", "dd"})) ||
+               (isIn(current, {"thead", "tbody", "tfoot"}) && isIn(name, {"thead", "tbody", "tfoot"}));
+    }
+
+    void push(const std::string& name) {
+        stack_.push_back(name);
+        ++openCounts_[name];
+    }
+
+    void pop() {
+        --openCounts_[stack_.back()];
+        stack_.pop_back();
+    }
+
+    bool printClosingTag() {
+        const std::size_t end = tagEnd(pos_);
+        if (end == std::string_view::npos) return false;
+        const std::string name = nameAt(pos_ + 2);
+        // A stray end tag matches nothing, so it leaves the nesting alone.
+        const auto open = openCounts_.find(name);
+        if (open != openCounts_.end() && open->second > 0) {
+            while (stack_.back() != name) pop();
+            pop();
+        }
+        line(tidyTag(text_.substr(pos_, end - pos_)), stack_.size());
+        pos_ = end;
+        return true;
+    }
+
+    bool printOpeningTag() {
+        const std::size_t end = tagEnd(pos_);
+        if (end == std::string_view::npos) return false;
+        const std::string name = nameAt(pos_ + 1);
+        const std::string tag = tidyTag(text_.substr(pos_, end - pos_));
+        const bool selfClosed = end >= 2 && text_[end - 2] == '/';
+
+        if (html_) {
+            if (!stack_.empty() && closesImplicitly(stack_.back(), name)) pop();
+            if (!selfClosed && isIn(name, {"script", "style", "pre", "textarea"})) {
+                pos_ = end;
+                printRawElement(name, tag);
+                return true;
+            }
+        }
+        pos_ = end;
+        if (selfClosed || (html_ && isVoidElement(name))) {
+            line(tag, stack_.size());
+        } else if (!printInlineElement(name, tag)) {
+            line(tag, stack_.size());
+            push(name);
+        }
+        return true;
+    }
+
+    // The closing tag of `name` at `at`, if that's what is there.
+    std::size_t closingTagEnd(const std::string& name, std::size_t at) const {
+        if (!startsWith(text_, at, "</") || nameAt(at + 2) != name) return std::string_view::npos;
+        return tagEnd(at);
+    }
+
+    // <title>Short text</title> reads best on one line.
+    bool printInlineElement(const std::string& name, const std::string& tag) {
+        const std::size_t next = text_.find('<', pos_);
+        if (next == std::string_view::npos) return false;
+        const std::string_view content = trimMarkupSpace(text_.substr(pos_, next - pos_));
+        if (content.size() > kMaxInlineLength || content.find('\n') != std::string_view::npos) return false;
+        const std::size_t end = closingTagEnd(name, next);
+        if (end == std::string_view::npos) return false;
+        startLine(stack_.size());
+        out_ += tag;
+        out_ += content;
+        out_ += tidyTag(text_.substr(next, end - next));
+        out_ += '\n';
+        pos_ = end;
+        return true;
+    }
+
+    // Finds the end tag of a script or similar, whatever case it is in.
+    std::size_t findRawClosingTag(const std::string& name) const {
+        for (std::size_t at = text_.find("</", pos_); at != std::string_view::npos; at = text_.find("</", at + 2)) {
+            if (nameAt(at + 2) == name) return at;
+        }
+        return std::string_view::npos;
+    }
+
+    void printRawElement(const std::string& name, const std::string& tag) {
+        const std::size_t closer = findRawClosingTag(name);
+        const std::size_t contentEnd = closer == std::string_view::npos ? text_.size() : closer;
+        const std::string_view content = text_.substr(pos_, contentEnd - pos_);
+        const std::size_t tagStop = closer == std::string_view::npos ? closer : tagEnd(closer);
+        const std::string closing =
+            tagStop == std::string_view::npos ? std::string() : tidyTag(text_.substr(closer, tagStop - closer));
+
+        if (name == "pre" || name == "textarea") {
+            // Whitespace is part of the content here.
+            startLine(stack_.size());
+            out_ += tag;
+            out_ += content;
+            out_ += closing;
+            out_ += '\n';
+        } else if (trimMarkupSpace(content).empty()) {
+            line(tag + closing, stack_.size());
+        } else {
+            line(tag, stack_.size());
+            lines(content, stack_.size() + 1);
+            if (!closing.empty()) line(closing, stack_.size());
+        }
+        pos_ = tagStop == std::string_view::npos ? text_.size() : tagStop;
+    }
+
+    std::string_view text_;
+    bool html_;
+    std::size_t pos_ = 0;
+    std::string out_;
+    std::vector<std::string> stack_;
+    std::map<std::string, std::size_t> openCounts_;
+};
+
 }  // namespace
+
+std::string prettyMarkup(std::string_view text, bool html) {
+    return MarkupPrinter(text, html).print();
+}
 
 std::string base64Encode(std::string_view data) {
     static constexpr char kAlphabet[] =

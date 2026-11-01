@@ -214,11 +214,17 @@ void ResponseView::renderBody() {
     CodeLanguage language = languageFor(mimeTypeOf(contentType), text);
 
     const bool pretty = view_->GetSelection() == 0;
-    if (pretty && language == CodeLanguage::Json && text.size() <= kMaxPrettyBytes) {
-        if (auto formatted = prettyJson(text)) {
-            text = std::move(*formatted);
-        } else if (mimeTypeOf(contentType).find("json") == std::string::npos) {
-            language = CodeLanguage::Plain;  // only looked like JSON
+    if (!pretty) {
+        language = CodeLanguage::Plain;  // just the text as it arrived
+    } else if (text.size() <= kMaxPrettyBytes) {
+        if (language == CodeLanguage::Html || language == CodeLanguage::Xml) {
+            text = prettyMarkup(text, language == CodeLanguage::Html);
+        } else if (language == CodeLanguage::Json) {
+            if (auto formatted = prettyJson(text)) {
+                text = std::move(*formatted);
+            } else if (mimeTypeOf(contentType).find("json") == std::string::npos) {
+                language = CodeLanguage::Plain;  // only looked like JSON
+            }
         }
     }
 
