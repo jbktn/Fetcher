@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Fetcher
+Comment=Test API calls, modify them and save them
+Exec=fetcher
+Icon=fetcher
+Terminal=false
+Categories=Development;WebDevelopment;Network;
+Keywords=api;rest;http;client;request;

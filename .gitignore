@@ -1,0 +1,16 @@
+# Build output
+/build/
+/build-*/
+/out/
+
+# Portable toolchain downloaded by scripts/bootstrap-windows.ps1
+/.toolchain/
+
+# Editors and OS files
+.vs/
+.vscode/
+.idea/
+.DS_Store
+*.user
+compile_commands.json
+__pycache__/

@@ -1,0 +1,7 @@
+// Application icon, per-monitor DPI awareness and the standard wxWidgets resources.
+#define wxUSE_RC_MANIFEST 1
+#define wxUSE_DPI_AWARE_MANIFEST 2
+
+appicon ICON "fetcher.ico"
+
+#include "wx/msw/wx.rc"
