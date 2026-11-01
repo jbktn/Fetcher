@@ -15,6 +15,13 @@ std::string base64Encode(std::string_view data);
 // formatting are kept exactly: 1.10 stays 1.10 and huge integers stay intact.
 std::optional<std::string> prettyJson(std::string_view text);
 
+// Puts each tag of HTML or XML on its own indented line, dropping blank lines.
+// Only whitespace between tags changes, and broken markup is still laid out as
+// well as it can be. With `html`, tag names ignore case, tags such as <br> and
+// <li> needn't be closed, and the contents of <script>, <style>, <pre> and
+// <textarea> aren't treated as markup.
+std::string prettyMarkup(std::string_view text, bool html);
+
 bool isValidUtf8(std::string_view text);
 
 // A quick check for content that would not display as text.
