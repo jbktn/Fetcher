@@ -13,7 +13,8 @@ wxDEFINE_EVENT(EVT_ROWS_CHANGED, wxCommandEvent);
 
 class KeyValueEditor::Row : public wxPanel {
 public:
-    Row(wxWindow* parent, const wxString& keyHint, const wxString& valueHint) : wxPanel(parent) {
+    Row(wxWindow* parent, const wxString& keyHint, const wxString& valueHint)
+        : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxFULL_REPAINT_ON_RESIZE) {
         SetMinSize(wxSize(-1, FromDIP(36)));
 
         enabled = new FlatCheck(this);

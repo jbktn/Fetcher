@@ -1022,7 +1022,8 @@ void TabbedBook::addPage(wxWindow* page, const wxString& label) {
 
 Field::Field(wxWindow* parent, wxWindowID textId, long textStyle, Glyph glyph) : glyph_(glyph) {
     SetBackgroundStyle(wxBG_STYLE_PAINT);
-    Create(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxCLIP_CHILDREN | wxBORDER_NONE);
+    Create(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+           wxTAB_TRAVERSAL | wxCLIP_CHILDREN | wxBORDER_NONE | wxFULL_REPAINT_ON_RESIZE);
     SetMinSize(wxSize(-1, FromDIP(32)));
 
     text_ = new wxTextCtrl(this, textId, wxString(), wxDefaultPosition, wxDefaultSize, textStyle | wxBORDER_NONE);
